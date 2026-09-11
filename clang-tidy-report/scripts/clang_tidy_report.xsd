@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Schema for the "format=xml" output of run_clang_tidy.py (see write_report_xml()).
+  Attribute-based by design: every diagnostic is fully identified by attributes
+  (file/line/col/severity[/check]) with only the human-readable message as element
+  text, so a consumer (human or AI) can locate and act on any finding without parsing
+  prose. Validate a generated report with:
+
+    xmllint -noout -schema clang_tidy_report.xsd clang_tidy_report.xml
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           elementFormDefault="qualified">
+
+  <xs:simpleType name="severity">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="warning"/>
+      <xs:enumeration value="error"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- One clang-tidy finding. `check` is only present on <diag> elements that
+       are not already nested under a <check name="..."> parent (i.e. inside
+       <needsAiReview>, where each diagnostic can belong to a different check). -->
+  <xs:complexType name="diag">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute name="file" type="xs:string" use="required"/>
+        <xs:attribute name="line" type="xs:positiveInteger" use="required"/>
+        <xs:attribute name="col" type="xs:positiveInteger" use="required"/>
+        <xs:attribute name="severity" type="severity" use="required"/>
+        <xs:attribute name="check" type="xs:string" use="optional"/>
+        <xs:attribute name="reason" type="xs:string" use="optional"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+
+  <!-- Diagnostics for one clang-tidy check name (may itself be a comma-joined
+       list of check names when several checks fired on the same finding,
+       e.g. "hicpp-avoid-c-arrays,modernize-avoid-c-arrays,-warnings-as-errors"). -->
+  <xs:complexType name="checkGroup">
+    <xs:sequence>
+      <xs:element name="diag" type="diag" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+    <xs:attribute name="name" type="xs:string" use="required"/>
+  </xs:complexType>
+
+  <xs:element name="clang-tidy-report">
+    <xs:complexType>
+      <xs:sequence>
+        <!-- Files clang-tidy's own "fix" auto-applied and (for the fixing skills,
+             not clang-tidy-report which always runs read-only) build-verified. -->
+        <xs:element name="fixedFiles" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="file" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="path" type="xs:string" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- Diagnostics whose auto-fix was attempted, broke the build, and was
+             reverted (worktree only) — needs a hand/AI fix, not a re-run of
+             the auto-fixer. -->
+        <xs:element name="needsAiReview" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="diag" type="diag" minOccurs="0" maxOccurs="unbounded"/>
+            </xs:sequence>
+            <xs:attribute name="count" type="xs:nonNegativeInteger" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- Summary: one entry per check name, with its total diagnostic count.
+             Every name here has a matching <check> under <diagnostics>. -->
+        <xs:element name="checks" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="check" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="name" type="xs:string" use="required"/>
+                  <xs:attribute name="count" type="xs:positiveInteger" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+
+        <!-- The findings themselves, grouped by check. -->
+        <xs:element name="diagnostics" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="check" type="checkGroup" minOccurs="0" maxOccurs="unbounded"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+
+      <xs:attribute name="mode" use="required">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="all"/>
+            <xs:enumeration value="diff"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="tus" type="xs:nonNegativeInteger" use="required"/>
+      <xs:attribute name="generated" type="xs:string" use="required"/>
+      <xs:attribute name="autofixed" type="xs:nonNegativeInteger" use="required"/>
+      <xs:attribute name="reportOnly" type="xs:boolean" use="required"/>
+      <xs:attribute name="remaining" type="xs:nonNegativeInteger" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>
