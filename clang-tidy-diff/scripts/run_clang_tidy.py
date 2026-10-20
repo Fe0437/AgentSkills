@@ -143,6 +143,51 @@ def load_skip_paths(root):
     return tuple(os.path.normpath(p) for p in paths)
 
 
+DEFAULT_TU_MEMORY_MB = 1024
+
+
+def load_tu_memory_mb(root):
+    """clang_tidy_memory_per_tu_mb from the project's CONFIG_FILENAME, or the generic default."""
+    cfg_path = os.path.join(root, CONFIG_FILENAME)
+    if os.path.isfile(cfg_path):
+        try:
+            with open(cfg_path) as f:
+                value = json.load(f).get("clang_tidy_memory_per_tu_mb", DEFAULT_TU_MEMORY_MB)
+            if isinstance(value, int) and value > 0:
+                return value
+        except (OSError, ValueError):
+            pass
+    return DEFAULT_TU_MEMORY_MB
+
+
+def physical_memory_bytes():
+    """The machine's physical memory, or None where the platform does not say."""
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (AttributeError, ValueError, OSError):
+        return None
+
+
+def default_jobs(root):
+    """As many clang-tidy processes as there are cores, but no more than memory holds at once.
+
+    Each process keeps a whole translation unit in memory. When more run than memory holds, the
+    machine swaps, every process slows down many times over and the slow ones time out, so the
+    report silently misses them. A project with large translation units, such as C++ modules that
+    import a whole program, says how much one takes with clang_tidy_memory_per_tu_mb.
+    """
+    cores = os.cpu_count() or 4
+    memory = physical_memory_bytes()
+    if memory is None:
+        return cores
+    tu_mb = load_tu_memory_mb(root)
+    by_memory = max(1, memory // (tu_mb * 1024 * 1024))
+    if by_memory < cores:
+        log(f"jobs limited to {by_memory} of {cores} cores: {memory // (1024 * 1024)} MB of memory "
+            f"at {tu_mb} MB per translation unit (clang_tidy_memory_per_tu_mb)")
+    return min(cores, by_memory)
+
+
 def load_project_config(root):
     """Load {root}/.clang-tidy-autofix.json if present.
 
@@ -164,6 +209,10 @@ def load_project_config(root):
                                     analyzed at all, such as tests that are
                                     meant not to compile. Unlike third-party
                                     paths, this is the project's own code.
+      clang_tidy_memory_per_tu_mb - a number, not a list: the memory one
+                                    clang-tidy process needs, which limits
+                                    how many run at once (default 1024);
+                                    read by default_jobs().
 
     Returns (clang_tidy_never_autofix_paths: set[str], never_autofix_checks: set[str],
              whole_batch_only_checks: set[str]).
@@ -804,7 +853,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--mode", choices=["diff", "all"], required=True)
     ap.add_argument("--build-dir", help="directory containing compile_commands.json")
-    ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
+    ap.add_argument("--jobs", type=int, default=None,
+                    help="parallel clang-tidy processes (default: the cores, fewer when memory "
+                         "would not hold that many translation units at once)")
     ap.add_argument("--no-fix", action="store_true", help="report only, apply no fixes")
     ap.add_argument("--report", help="report output path")
     ap.add_argument("--format", choices=["txt", "md", "xml"], default="txt",
@@ -835,6 +886,8 @@ def main():
             print(msg, file=lf, flush=True)
 
     root = find_repo_root()
+    if args.jobs is None:
+        args.jobs = default_jobs(root)
     global _third_party_paths, _skip_paths
     _third_party_paths = load_third_party_paths(root)
     _skip_paths = load_skip_paths(root)

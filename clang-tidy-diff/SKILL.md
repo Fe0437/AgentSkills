@@ -59,6 +59,12 @@ submodule may have one; a submodule's paths are relative to that submodule:
 Files that belong to the project but are never analyzed, such as tests that are meant not to
 compile, go in `clang_tidy_skip_paths` in `<repo-root>/.clang-tidy-autofix.json`.
 
+The script runs as many clang-tidy processes as there are cores, but no more than memory holds:
+each keeps a whole translation unit in memory, and a machine that swaps slows every process down
+until the large ones time out and drop out of the report. A project whose translation units are
+large, such as C++ modules that import most of the program, sets the memory one needs as
+`clang_tidy_memory_per_tu_mb` in the same file (default 1024).
+
 A reverted auto-fix is restored in the repository that owns the file, submodules included. Report
 results per repository, so it is clear which one each finding belongs to.
 
